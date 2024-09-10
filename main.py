@@ -1,23 +1,35 @@
+import  numpy as np
+import nnfs
+from nnfs.datasets import spiral_data
+import  matplotlib.pyplot as plt
 
-import numpy as np
-inputs = [[2.0, 3.0, 4.0, 2.5],
-          [3.0, 4.0, -2.0, 1.0],
-          [-1.1,2.5, 3.4, -0.5],
-          ]
 
-weights = [[0.4, 0.7, -0.1, 1.0],
-           [0.7, -0.21, 0.25, -0.1],
-           [-0.76, -0.37, 0.57, 0.86]]
+class Layer_Dense:
+    def __init__(self, n_inputs, n_neurons):
+        self.weights = np.random.uniform(0,1,(n_inputs,n_neurons ))
+        self.biases = np.random.uniform(0,1,(1,n_neurons))
 
-biases = [2.0, 3.0, 0.5]
+    def forward(self, inputs):
+        return np.dot(inputs, np.array(self.weights)) + self.biases
 
-layers_outputs = np.dot(inputs, np.array(weights).T) +biases
 
-print(layers_outputs)
 
-weights_1 = [[0.2,1.0,3.0]]
+nnfs.init()
 
-biases_1 = [1.0]
+X, y = spiral_data(samples=100, classes=2)
+Layer1 = Layer_Dense(2,5)
+Layer2 = Layer_Dense(5,3)
+Layer3 = Layer_Dense(3,2)
+Layer3.forward(Layer2.forward(Layer1.forward(X)))
+plt.scatter(X[:, 0], X[:, 1], c = y, cmap = 'brg')
+plt.show()
 
-layers_outputs_1 = np.dot(layers_outputs, np.array(weights_1).T) +biases_1
-print(layers_outputs_1)
+initialize_methods = ['xavier', 'he', 'gaussian']
+for method in initialize_methods:
+    output1 = layer1.forward(X)
+    output2 = layer2.forward(output1)
+
+    print("Layer 1 Output:")
+    print(output1)
+    print("\nLayer 2 Output:")
+    print(output2)
