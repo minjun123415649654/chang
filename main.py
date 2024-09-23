@@ -34,9 +34,12 @@ Activation3 = Activation_Softmax()
 x = np.linspace(0,2*np.pi,100).reshape(-1,1)
 y = np.sin(x)
 
+output1 = dense1.forward(x)
+output2 = dense2.forward(output1)
+output3 = dense3.forward(output2)
+
 plt.plot(x, y, label = "True Sine Wave", color='blue')
 plt.plot(x, Activation3.forward(x), label = "NN Output", color='red')
 plt.legend()
 plt.title("Sine Wave Approximation using Neural Network")
 plt.show()
-output = Activation3.forward(dense1.forward(x))
