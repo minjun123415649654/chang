@@ -1,160 +1,143 @@
-from nt import access
-from random import sample
-
+import pandas as pd
 import numpy as np
-import nnfs
-from nnfs.datasets import spiral_data
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.preprocessing import MinMaxScaler
+
+#시드 고정
+'''
+실행 할 떄 마다 결과가 달라지는 것을 방지
+random 컴퓨터의 현재 시간의 영향을 받음 => seed
+seed가 컴퓨터의 현재 시간의 영향을 받아서 변경되니까, seed 값을 고정하면
+랜덤값이 안바뀌겠죠?
+reproducability (재현성)
+'''
+
+seed = 1234
+np.random.seed(seed)
+torch.manual_seed(seed)
+
+#데이터 불러오기
+dataraw = pd.read_csv('data/BTC-USD.csv'
+                      , index_col='Date'
+                      , parse_dates=['Date'])
+
+# 정렬된 날짜 기준으로 data 불러오기
+dataset = pd.DataFrame(dataraw['Close'])
+#불러온 데이터(정렬된 날짜 기준으로) 종가만 가져옴
+
+#데이터 정규화
+scaler = MinMaxScaler()
+#Zero-mean Unit Variance 라는 정규화를 사용
+#MinMax 정규화를 이용 (t - min) / (max-min)
+dataset_norm = dataset.copy()
+# 나중에 기존데이터를 활용할텐데, 정규화를 통해 값이 변한다면
+# 확인이 불가능하겠죠? 그래서 확인하기 위해 복사 해서 씁니다.
+# 원래 값이 바뀌면 안되니까!
+dataset_norm['Close'] = scaler.fit_transform(dataset[['Close']])
+# dataset_norm['Close'] 를 min-max 정규화를 시켜준겁니다.
+
+# 데이터 분할 (일반적으로 7:1:2 학습:검증:테스트)
+# 검증이란? 학습 과정중에 진짜로 학습이 잘되고 있는지
+# 테스트 하기위한 테스트 셋인데, 데이터가 크면 평가(테스트)에
+# 시간이 많이 걸리겠죠? 적은 데이터셋으로 평가해서 테스트와 유사한
+# 성능을 얻자!
+
+totaldata = dataset.values
+totaldatatrain = int(len(totaldata)*0.7)
+totaldataval = int(len(totaldata)*0.1)
+training_set = dataset_norm[0:totaldatatrain]
+val_set = dataset_norm[totaldatatrain:totaldatatrain + totaldataval]
+test_set = dataset_norm[totaldatatrain + totaldataval:]
 
 
-class Layer_Dense:
+# 슬라이딩 윈도우 생성
+def create_sliding_windows(data, len_data, lag):
+    x, y = [], []
+    for i in range(lag, len_data):
+        x.append(data[i - lag:i, 0])
+        y.append(data[i,0])
+    return np.array(x), np.array(y)
 
-    def __init__(self, n_inputs, n_outputs):
-        '''
-        Args:
-            n_inputs:
-            n_outputs:
-        '''
-        self.weights = 0.01 * np.random.randn(n_inputs, n_outputs)
-        self.biases = np.zeros((1, n_outputs))
+lag = 2
+array_training_set = np.array(training_set)
+array_val_set = np.array(val_set)
+array_test_set = np.array(test_set)
 
-    def forward(self, inputs):
-        '''
-        Args:
-            inputs: 입력된 값
-        '''
-        # Y = ax + b
-        self.inputs = inputs
-        self.output = np.dot(inputs, self.weights) + self.biases
+x_train, y_train = create_sliding_windows(
+    array_training_set,len(array_training_set),lag)
+x_val, y_val = create_sliding_windows(
+    array_val_set,len(array_val_set),lag)
+x_test, y_test = create_sliding_windows(
+    array_test_set,len(array_test_set),lag)
 
-        def backward(self, dvalues):
-            '''
-            Args:
-                dvalues: 앞선 미분 값
-            '''
-            # f(x,w) = xw
-            # w 편미분 f'(x,w) = x
-            self.dweights = np.dot(self.inputs.T, dvalues)
-            # f(x,y) = x + y
-            # y 편미분 = 1
-            self.dbiases = np.sum(dvalues, axis=0, keepdims=True)
-            self.dbiases = np.dot(dvalues.T, self.weights.T)
+x_train, y_train = (torch.tensor(x_train, dtype=torch.float32),
+                    torch.tensor(y_train, dtype=torch.float32))
+x_val, y_val = (torch.tensor(x_val, dtype=torch.float32),
+                    torch.tensor(y_val, dtype=torch.float32))
+x_test, y_test = (torch.tensor(x_test, dtype=torch.float32),
+                    torch.tensor(y_test, dtype=torch.float32))
 
-class Activation_ReLU:
+class GRUModel(nn.Module):
+    def __init__(self,input_size, hidden_size, output_size):
+        super().__init__()
+        self.gru = nn.GRU(input_size,hidden_size,num_layers=3,
+                          batch_first=True,dropout=0.2)
+        self.fc = nn.Linear(hidden_size,output_size)
 
-    def forward(self, inputs):
-        self.inputs = inputs
-        self.output = np.maximum(0, inputs)
-        # 0보다 클떄 입력값이 그대로
-    def backward(self, dvalues):
-        self.dinputs = dvalues.copy()
-        self.dinputs[self.inputs <= 0] = 0
-        # self. inputs의 값이 0보다 작을 때는 0으로 만든다.
+    def forward(self, x):
+        _, h = self.gru(x)
+        out = self.fc(h[-1])
+        return out
 
-class Activation_Softmax:
+input_size = 1
+hidden_size = 64
+output_size = 1
+model = GRUModel(input_size,hidden_size,output_size)
 
-    def forward(self, inputs):
-        '''
-        Args:
-            inputs:
-        '''
-        self.inputs = inputs
-        exp_values = np.exp(inputs - np.max(inputs, axis=1, keepdims=True))
-        probabilities = exp_values / np.sum(exp_values, axis=1, keepdims=True)
-        #각각의 입력에 대한 노말라이즈 0~1 값으로 변경
-        self.output = probabilities
+criterion = nn.MSELoss()
+optimizer = optim.Adam(model.parameters(), lr=0.0001)
 
-    def backward(self, dvalues):
-        '''
-        Args:
-            dvalues: 이전의 미분값
-        '''
-        self.dinputs = np.empty_like(dvalues)
-        # enumerate zip
-        # enumerate는 index랑 내부의 값을 순차적으로 내뱉는 역할
-        # enumerate(['A','B','C'])
-        # 0,'A'   1,'B'  2, 'C'
-        for index, (single_output, single_dvalues) in enumerate(zip(self.output, dvalues)):
-            single_output = single_output.reshape(-1, 1)
-            #reshape -1,1
-            #(2,2) => 4,1 , (10,20) => 200,1
-            #output 결과를 펼침
-            jacobian_matrix = np.diagflat(single_output) - np.dot(single_output, single_output.T)
-            self.dinputs[index] = np.dot(jacobian_matrix, single_dvalues)
-class Loss:
-    def forward(self, outputs, y):
-        sample_losses = self.forward(outputs, y)
-        data_loss = np.mean(sample_losses)
-        return data_loss
+epochs = 1000
+batch_size = 256
 
-class Loss_CategoricalCrossentropy(Loss):
-    def forward(self, y_pred, y_true):
-        sample = len(y_pred)
-        y_pred_clipped = np.clip(y_pred, 1e-7, 1 - 1e-7)
+for epoch in range(epochs):
+    model.train()
+    optimizer.zero_grad()
+    outputs = model(x_train.unsqueeze(-1))
+    loss = criterion(outputs.squeeze(), y_train)
+    loss.backward()
+    optimizer.step()
 
-        if len(y_true.shape) == 1:
-            correct_confidences = y_pred_clipped[
-                range(sample), y_true
-            ]
-        elif len(y_true.shape) == 2:
-            correct_confidences = np.sum(y_pred_clipped * y_true, axis=1)
+    if (epoch + 1) % 10 ==0:
+        model.eval()
+        val_outputs = model(x_val.unsqueeze(-1))
+        val_loss = criterion(val_outputs.squeeze(), y_val)
+        print(f"Epoch []{epoch+1}/{epochs}"
+              f"Loss: {loss.item():.4f}"
+              f"vValLoss : {val_loss.item():.4f}")
 
-        negative_log_likelihoods = -np.log(correct_confidences)
-        return negative_log_likelihoods
-    def backward(self, dvalues, y_true):
-        sample = len(dvalues)
-        labels = len(dvalues[0])
+model.eval()
+y_pred = model(x_test.unsqueeze(-1)).detach().numpy()
+y_pred_inver_norm = scaler.inverse_transform(y_pred)
 
-        if len(y_true.shape) == 1:
-            y_true = np.eye(labels)[y_true]
+def rmse(dataset,datapred):
+    return np.sqrt(np.mean((datapred - dataset) ** 2))
+def mape(dataset,datapred):
+    return np.mean(np.abs((dataset - datapred) / dataset)) * 100
 
-        self.dinputs = -y_true/dvalues
-        self.dinputs = self.dinputs / sample
+dataset = dataset['Close'][totaldatatrain+totaldataval + lag : ].values
+print('RMSE :', rmse(dataset, y_pred_inver_norm))
+print('MAPE :', mape(dataset, y_pred_inver_norm))
 
-class Activation_Softmax_Loss_categoricalCrossentropy():
-    def __init__(self):
-        self.activation = Activation_Softmax()
-        self.loss = Loss_CategoricalCrossentropy()
-
-    def forward(self, y_pred, y_true):
-        self.activation.forward(y_pred)
-        self.output = self.activation.output
-        return self.loss.forward(self.output, y_true)
-
-    def backward(self, dvalues, y_true):
-        sample = len(dvalues)
-
-        if len(y_true.shape) == 2:
-            y_true = np.argmax(y_true, axis=1)
-
-
-        self.dinputs = dvalues.copy()
-        self.dinputs[range(sample), y_true] -= 1
-        self.dinputs = self.dinputs / sample
-
-dense1 = Layer_Dense(2, 3)
-activation1 = Activation_ReLU()
-dense2 = Layer_Dense(3, 3)
-loss_activation = Activation_Softmax_Loss_categoricalCrossentropy()
-
-X,y = spiral_data(samples=100, classes=3)
-
-dense1.forward(X)
-activation1.forward(dense1.output)
-dense2.forward(activation1.output)
-loss = loss_activation.forward(dense2.output, y)
-
-print('loss', loss)
-
-predictions = np.argmax(loss.activation.output, axis=1)
-if len(y.shape) == 2:
-    y = np.argmax(y, axis=1)
-accuracy = np.mean(predictions == y)
-
-print('accuracy', accuracy)
-
-loss_activation.backward(loss_activation.output, y)
-dense2.backward(loss_activation.dinputs)
-activation1.backward(dense2.dinputs)
-dense1.backward(activation1.dinputs)
-
-print(dense1.dweights)
+plt.figure(figsize=(10,4))
+plt.plot(dataset, label="Data Test", color='red')
+plt.plot(y_pred_inver_norm, label="Predictions", color='blue')
+plt.title('bt')
+plt.xlabel('Day')
+plt.ylabel('Price')
+plt.legend()
+plt.show()
